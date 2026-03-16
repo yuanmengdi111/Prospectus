@@ -1,0 +1,993 @@
+library(qgraph)
+library(networktools)
+library(bootnet)
+library(mgm)
+
+#----------------------估计网络-------------------
+data1<-read.csv("E:\\Rworkplace\\童年创伤自伤\\总.csv")
+
+network1 <- as.matrix(data1)
+
+mynetwork1 <- estimateNetwork(data=network1,
+                              default = "EBICglasso",
+                              tuning = 0.5,
+                              corMethod="cor",#相关
+                              corArgs=list(method="spearman",#估计更加稳健
+                                           use="pairwise.complete.obs"))
+#-----------------------原始网络图----------------------
+dev.off() 
+# 清除所有现有图形
+pdf("Network.pdf", width = 13, height = 7)
+
+# 如果你要预览，可以用 windows()，但保存 PDF 时不要用
+windows(width = 14, height = 6)  
+
+
+# 2. 布局设置：左图 : 右图例 = 4 : 3
+layout(matrix(c(1, 2), 1, 2), widths = c(4, 3))
+
+# 3. 左边 Panel：画网络图
+par(mar = c(5, 4, 4, 2)) # 设置左图边距
+
+# 定义与图例一致的颜色
+plot_colors <- c("skyblue", "orange") 
+
+plot(mynetwork1, 
+     layout = "spring",
+     layout.par = list(repulse.rad = 200),
+     groups = list("FASM" = 1:15, "CTQ" = 16:20), # 确保分组正确
+     color = plot_colors,    # 使用与图例一致的颜色
+     posCol = "darkgreen",    # 【改这里】正相关用深蓝色
+     negCol = "darkred",     # 负相关用深红色
+     fade = TRUE,
+     trans = 0.05,
+     edge.width = 0.7,
+     legend = FALSE,         # 关掉自带的简易图例
+     curve = 0.7,            # 你要求的曲线
+     curveAll = TRUE,        # 全部使用曲线
+     vsize = 7,              # 稍微调大节点以便阅读
+     label.cex = 1.3,        # 字体大小
+     borders = FALSE         # 去掉边框更现代(可选)
+)
+
+# 4. 右边 Panel：画详细图例
+par(mar = c(0, 0, 0, 0)) # 去掉右图边距
+plot.new()               # 打开空白画布
+
+legend(
+  x = 0, y = 0.95,   # x设为负数，让图例向左靠近网络图
+  legend = c(
+    expression(bold("FASM")),
+    " FASM_1: To avoid school, work, or other activities",
+    " FASM_2: To relieve feeling numb or empty",
+    " FASM_3: To get attention",
+    " FASM_4: To feel something, even if it was pain",
+    " FASM_5: To avoid doing something unpleasant", # 文字略微精简防止溢出
+    " FASM_6: To try to get a reaction from someone",
+    " FASM_7: To receive more attention from parents",
+    " FASM_8: To avoid being with people",
+    " FASM_9: To punish yourself",
+    " FASM_10: To avoid punishment or consequences",
+    " FASM_11: To stop bad feelings",
+    " FASM_12: To let others know how desperate you were",
+    " FASM_13: To get your parents to understand/notice",
+    " FASM_14: To get help",
+    " FASM_15: To feel relaxed",
+    "",                          # ⭐ 量表间空行
+    expression(bold("CTQ")),
+    " EA: Emotional abuse",
+    " PA: Physical abuse",
+    " SA: Sexual abuse",
+    " EN: Emotional neglect",
+    " PN: Physical neglect"
+  ),
+  cex = 0.95,        # 字体大小
+  y.intersp = 1.3,   # 行间距
+  pt.cex = 1.8,      # 点的大小
+  bty = "n",         # 无边框
+  pch = c(
+    NA,              # 标题 FASM
+    rep(19, 15),     # FASM 15个实心圆
+    NA,              # 空行
+    NA,              # 标题 CTQ
+    rep(19, 5)       # CTQ 5个实心圆
+  ),
+  col = c(
+    NA,
+    rep("skyblue", 15), # ⭐ 对应 FASM 颜色
+    NA,
+    NA,
+    rep("orange", 5)    # ⭐ 对应 CTQ 颜色
+  )
+)
+
+dev.off()
+
+#-----------------------------中心性EI和桥EI----------------------------------
+library(bootnet)
+library(networktools)
+library(ggplot2)
+library(patchwork) # 拼图神器
+library(dplyr)     # 数据处理
+library(grid)
+
+# ==============================================================================
+# 0. 定义“灰色皮肤”主题 (这样代码更整洁，不用写两遍)
+# ==============================================================================
+my_grey_theme <- theme(
+  # 1. 灰色绘图区背景
+  panel.background = element_rect(fill = "#EBEBEB", color = NA),
+  # 2. 白色主网格线
+  panel.grid.major = element_line(color = "white", size = 0.5),
+  panel.grid.minor = element_blank(),
+  # 3. 白色外部背景
+  plot.background = element_rect(fill = "white", color = NA),
+  # 4. 坐标轴
+  axis.ticks = element_blank(),
+  axis.text = element_text(color = "black", size = 10),
+  # 5. ⭐ 灰色标题条背景 (关键点)
+  strip.background = element_rect(fill = "#D9D9D9", color = NA),
+  strip.text = element_text(size = 12, face = "bold", color = "black", margin = margin(6,0,6,0))
+)
+
+# ==============================================================================
+# 1. 数据准备 (保持原逻辑)
+# ==============================================================================
+
+# --- (A) 提取直接 EI ---
+cent_table <- centralityTable(mynetwork1) 
+df_general <- cent_table %>% 
+  filter(measure == "ExpectedInfluence") %>%
+  select(node, value) %>%
+  mutate(value = scale(value), 
+         # ⭐ 技巧：增加一列 Label，专门用来做标题条
+         Label = " Expected Influence") 
+
+# --- (B) 提取桥接 EI ---
+my_communities <- c(rep("C-FASM", 15), rep("CTQ", 5))
+bridge_res <- bridge(mynetwork1$graph, communities = my_communities)
+
+df_bridge <- data.frame(
+  node = names(bridge_res$`Bridge Expected Influence (1-step)`),
+  value = as.numeric(bridge_res$`Bridge Expected Influence (1-step)`),
+  # ⭐ 技巧：增加一列 Label
+  Label = " Bridge Expected Influence"
+) %>%
+  mutate(value = scale(value))
+
+# ==============================================================================
+# 2. 统一排序 (保持 S 型曲线)
+# ==============================================================================
+ordered_nodes <- df_general$node[order(df_general$value)]
+
+# 锁定顺序
+df_general$node <- factor(df_general$node, levels = ordered_nodes)
+df_bridge$node  <- factor(df_bridge$node, levels = ordered_nodes)
+
+# ==============================================================================
+# 3. 绘图 (应用灰色主题)
+# ==============================================================================
+
+# --- 左图：General EI ---
+p1 <- ggplot(df_general, aes(x = node, y = value, group = 1)) +
+  geom_line(color = "black", size = 0.8) +
+  geom_point(size = 3, color = "black") +
+  
+  # ⭐ 关键技巧：用 facet_wrap 代替 ggtitle，为了那个灰色框
+  facet_wrap(~ Label) + 
+  
+  coord_flip() +
+  scale_y_continuous(n.breaks = 6) +
+  labs(y = "Z-score", x = "") +
+  
+  # 应用定义好的灰色主题
+  my_grey_theme
+
+# --- 右图：Bridge EI ---
+p2 <- ggplot(df_bridge, aes(x = node, y = value, group = 1)) +
+  geom_line(color = "black", size = 0.8) +
+  geom_point(size = 3, color = "black") +
+  
+  # ⭐ 关键技巧：用 facet_wrap 代替 ggtitle
+  facet_wrap(~ Label) +
+  
+  coord_flip() +
+  scale_y_continuous(n.breaks = 6) +
+  labs(y = "Z-score", x = "") +
+  
+  # 应用主题 + 隐藏Y轴标签
+  my_grey_theme + 
+  theme(
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank()
+  )
+
+# ==============================================================================
+# 4. 拼图并保存
+# ==============================================================================
+final_plot <- p1 + p2
+
+pdf("Figure_Centrality_Connected_Separate_Gray.pdf", width = 11, height = 7)
+print(final_plot)
+dev.off()
+
+
+#------------------------------强度EI的稳定性---------------------------------#
+
+# ==============================================================================
+# 1. 运行 Bootstrap (Case-dropping)
+# ==============================================================================
+groups1 <- list("C-FASM" = 1:15, "CTQ" = 16:20)
+
+# 这里 statistics 必须准确指定你要对比的两个指标
+# 注意：bridgeExpectedInfluence 是固定写法，首字母小写
+boot_bridge1 <- bootnet(mynetwork1,
+                        nBoots = 1000,
+                        type = "case",
+                        statistics = c("ExpectedInfluence", "bridgeExpectedInfluence"), 
+                        communities = groups1)
+
+
+# --- 打印 CS 系数查看稳定性 ---
+cat("Network 1 Stability:\n")
+print(corStability(boot_bridge1))
+
+
+# ==============================================================================
+# 2. 绘图并保存为 PDF (使用你提供的 grid 代码结构)
+# ==============================================================================
+
+pdf("Centrality_Bridge_Stability_Comparison.pdf", 
+    width = 170/25.4, height = 140/25.4)
+
+# 设置布局：这里我暂时设为 1行1列，因为你只画这一张对比图，这样图会更大、更清晰
+# 如果你以后想拼别的图，可以改回 grid.layout(1, 2)
+grid.newpage()
+pushViewport(viewport(layout = grid.layout(1, 1))) 
+
+# --- 绘制网络 (包含 EI 和 Bridge EI) ---
+# 关键点：这里没有加 theme_bw()，保留了默认的彩色背景和线条颜色
+p1 <- plot(boot_bridge1, 
+           statistics = c("expectedInfluence", "bridgeExpectedInfluence")) + 
+  theme(legend.position = "bottom",    # 保留你想要的图例位置
+        legend.title = element_blank()) 
+
+# 将图打印到布局的第1行第1列
+print(p1, vp = viewport(layout.pos.row = 1, layout.pos.col = 1))
+
+dev.off()
+
+
+#---------------------------黑灰方块图---------------------------------------------#
+my_communities <- c(rep("C-FASM", 15), rep("CTQ", 5))
+bridge_res <- bridge(mynetwork1$graph, communities = my_communities)
+
+# 1. 先把原始数据转换成 Spearman 相关矩阵
+# 注意：use="pairwise.complete.obs" 处理缺失值
+cor_matrix <- cor(data1, method = "spearman", use = "pairwise.complete.obs")
+
+boot_nonpara_bridge <- bootnet(
+  mynetwork1,
+  nBoots = 1000,
+  type = "nonparametric",
+  statistics = c("expectedInfluence", "bridgeExpectedInfluence"),
+  communities = my_communities
+)
+
+pdf("boot_nonpara_bridge-EI.pdf",      width = 170/25.4, height = 140/25.4)
+plot(boot_nonpara_bridge,       
+     statistics = c("bridgeExpectedInfluence"),       
+     plot = "difference")
+
+dev.off()
+pdf("boot_nonpara.pdf",      width = 170/25.4, height = 140/25.4)
+plot(boot_nonpara_bridge,       
+     statistics = c("expectedInfluence"),       
+     plot = "difference")
+dev.off()
+
+
+
+
+#取消------------------------------性别分组网络图---------------------------------#
+install.packages("NetworkComparisonTest")
+library(NetworkComparisonTest)
+data_male   <- read.csv("E:\\Rworkplace\\童年创伤自伤\\初中.csv")
+
+data_female <- read.csv("E:\\Rworkplace\\童年创伤自伤\\高中.csv")
+# 0. 准备工作
+# ==============================================================================
+# 计算统一布局 (必须步骤)
+network_male <- estimateNetwork(
+  data_male[, 1:20],
+  default   = "EBICglasso",
+  tuning    = 0.5,
+  corMethod = "cor",
+  corArgs   = list(method = "spearman",
+                   use = "pairwise.complete.obs"))
+network_female <- estimateNetwork(
+  data_female[, 1:20],
+  default   = "EBICglasso",
+  tuning    = 0.5,
+  corMethod = "cor",
+  corArgs   = list(method = "spearman",
+                   use = "pairwise.complete.obs"))
+  
+
+L <- averageLayout(network_male, network_female)
+node_colors <- c("#AED6F1", "#FFC04C")
+
+# ==============================================================================
+# 1. 设置画布 (A4 横向标准尺寸)
+# ==============================================================================
+# A4 纸横向最大约 11.7英寸。我们设为 11，留出打印边距。
+# 高度设为 7.5，比例协调。
+dev.off()
+pdf("Figure_S1_Gender_Comparison_A4.pdf", width = 11, height = 7.5, family = "Times")
+
+# ==============================================================================
+# 2. 布局设置：左(男) : 中(女) : 右(图例)
+# ==============================================================================
+# 比例设为 4:4:3.2，给图例稍微多一点空间，防止文字换行
+
+layout(matrix(c(1, 2, 3), 1, 3), widths = c(4.25, 4.25, 3))
+# ==============================================================================
+# 3. 左图：男性网络 (Male)
+# ==============================================================================
+par(mar = c(4, 0, 3, 0.5))# 边距适中
+
+qgraph(network_male$graph,
+       layout = L,             # ⭐ 统一布局
+       groups = list("FASM"=1:15, "CTQ"=16:20),
+       # --- 样式参数 ---
+       color = node_colors,
+       posCol = "darkgreen",    negCol = "darkred",
+       cut = 0.2,              
+       fade = FALSE,           # 实心线
+       edge.width = 1.2,       
+       layout.par = list(repulse.rad = 70), # 紧凑度微调
+       curveAll = TRUE, curve = 0.4,
+       legend = FALSE,         
+       vsize = 8, 
+       label.cex = 1.25,       # ⭐ 字体稍微调小一点点适配 A4
+       borders = FALSE
+)
+text(-1.0, 1.2, "Male", cex = 1.5, font = 2, adj = 0, xpd = TRUE)
+# ==============================================================================
+# 4. 中图：女性网络 (Female)
+# ==============================================================================
+par(mar = c(4, 0, 3, 0.5))
+
+qgraph(network_female$graph,
+       layout = L,             # ⭐ 统一布局
+       groups = list("FASM"=1:15, "CTQ"=16:20),
+       # --- 样式参数 ---
+       color = node_colors,
+       posCol = "darkgreen",    negCol = "darkred",
+       cut = 0.2,              
+       fade = FALSE,           
+       edge.width = 1.2,       
+       layout.par = list(repulse.rad = 70), 
+       curveAll = TRUE, curve = 0.4,
+       legend = FALSE,         
+       vsize = 8, label.cex = 1.25, borders = FALSE
+)
+text(-1.0, 1.2, "Female", cex = 1.5, font = 2, adj = 0, xpd = TRUE)
+
+# ==============================================================================
+# 5. 右侧：详细图例
+# ==============================================================================
+par(mar = c(0, 0, 0, 0)) 
+plot.new()               
+
+legend(
+  x = 0, y = 0.95,       # 向左贴近图片
+  legend = c(
+    expression(bold("FASM")),
+    " FASM_1: To avoid school, work, or other activities",
+    " FASM_2: To relieve feeling numb or empty",
+    " FASM_3: To get attention",
+    " FASM_4: To feel something, even if it was pain",
+    " FASM_5: To avoid doing something unpleasant", 
+    " FASM_6: To try to get a reaction from someone",
+    " FASM_7: To receive more attention from parents",
+    " FASM_8: To avoid being with people",
+    " FASM_9: To punish yourself",
+    " FASM_10: To avoid punishment or consequences",
+    " FASM_11: To stop bad feelings",
+    " FASM_12: To let others know how desperate you were",
+    " FASM_13: To get your parents to understand/notice",
+    " FASM_14: To get help",
+    " FASM_15: To feel relaxed",
+    "",                          
+    expression(bold("CTQ")),
+    " EA: Emotional abuse",
+    " PA: Physical abuse",
+    " SA: Sexual abuse",
+    " EN: Emotional neglect",
+    " PN: Physical neglect"
+  ),
+  cex = 1,        # ⭐ 字体调到 0.9，保证在 A4 纸上不拥挤且清晰
+  y.intersp = 1.3,  # 行间距
+  pt.cex = 1.6,     # 点的大小
+  bty = "n",        
+  pch = c(NA, rep(19, 15), NA, NA, rep(19, 5)),
+  col = c(NA, rep("#AED6F1", 15), NA, NA, rep("#FFC04C", 5))
+)
+
+dev.off()
+
+nct_result <- NCT(
+  data_male[, 1:20],
+  data_female[, 1:20],
+  it = 1000,
+  binary.data = FALSE,
+  test.edges = TRUE,
+  test.centrality = TRUE,
+  edges = "all",
+  progressbar = TRUE
+)
+nct_result
+nct_result$diffcen.pval
+
+#取消----------------------性别分组中心性图（男bridge）--------------------------#
+# ==============================================================================
+# 1. 计算数据
+# ==============================================================================
+my_communities <- c(rep("C-FASM", 15), rep("CTQ", 5))
+bridge_centrality_male <- bridge(network_male$graph, 
+                                 communities = my_communities)
+
+# 提取数值
+nodes <- names(bridge_centrality_male$`Bridge Strength`)
+val_strength <- as.numeric(bridge_centrality_male$`Bridge Strength`)
+val_ei <- as.numeric(bridge_centrality_male$`Bridge Expected Influence (1-step)`)
+
+# ==============================================================================
+# 2. 核心步骤：合并数据并排序
+# ==============================================================================
+# 1. 确定节点顺序 (按 Strength 从小到大，形成 S 曲线)
+order_idx <- order(val_strength, decreasing = FALSE)
+ordered_nodes <- nodes[order_idx]
+
+# 2. 构建“长格式”数据框 (这是用分面画图的关键)
+# 我们把 Strength 和 EI 合并到一个表里，用 "Measure" 列来区分
+df_long <- data.frame(
+  Node = rep(nodes, 2),
+  Value = c(val_strength, val_ei),
+  Measure = c(rep("Bridge Strength", length(nodes)), 
+              rep("Bridge Expected Influence (1-step)", length(nodes)))
+)
+
+# 3. 锁定顺序
+# (A) 锁定节点顺序 (S型曲线)
+df_long$Node <- factor(df_long$Node, levels = ordered_nodes)
+# (B) 锁定面板顺序 (保证 Strength 在左边，EI 在右边)
+df_long$Measure <- factor(df_long$Measure, 
+                          levels = c("Bridge Strength", "Bridge Expected Influence (1-step)"))
+
+# ==============================================================================
+# 3. 绘图 (使用分面 Facet 实现灰色标题框)
+# ==============================================================================
+p_final <- ggplot(df_long, aes(x = Node, y = Value, group = 1)) +
+  geom_line(color = "black", size = 0.8) +
+  geom_point(color = "black", size = 3) +
+  
+  # ⭐ 核心：分面 (自动生成左右两个图，并带上标题框)
+  facet_wrap(~ Measure, scales = "free_x") + 
+  
+  coord_flip() +
+  scale_y_continuous(n.breaks = 6) +
+  labs(x = "", y = "") +
+  
+  # ⭐ 主题设置：复刻灰色背景和标题条
+  theme(
+    # 1. 画布背景 (灰色 #EBEBEB)
+    panel.background = element_rect(fill = "#EBEBEB", color = NA),
+    plot.background = element_rect(fill = "white", color = NA),
+    
+    # 2. 网格线 (白色，覆盖在灰色背景上)
+    panel.grid.major = element_line(color = "white", size = 0.5),
+    panel.grid.minor = element_blank(),
+    
+    # 3. 坐标轴
+    axis.ticks = element_blank(),
+    axis.text = element_text(color = "black", size = 10),
+    
+    # ⭐ 4. 标题栏背景 (深灰色条条！就是您要的那个)
+    strip.background = element_rect(fill = "#D9D9D9", color = NA),
+    # 标题栏文字
+    strip.text = element_text(size = 12, face = "bold", color = "black", margin = margin(5,0,5,0))
+  )
+
+
+# 4. 保存
+pdf("Figure_S1_Gender_male_Facet.pdf", width = 11, height = 7.5, family = "Times")
+print(p_final)
+dev.off()
+
+#取消----------------------性别分组中心性图（女bridge）--------------------------#
+# 1. 计算数据
+my_communities <- c(rep("C-FASM", 15), rep("CTQ", 5))
+bridge_centrality_female <- bridge(network_female$graph, 
+                                 communities = my_communities)
+
+# 提取数值
+nodes <- names(bridge_centrality_female$`Bridge Strength`)
+val_strength <- as.numeric(bridge_centrality_female$`Bridge Strength`)
+val_ei <- as.numeric(bridge_centrality_female$`Bridge Expected Influence (1-step)`)
+
+
+# 2. 核心步骤：合并数据并排序
+# 1. 确定节点顺序 (按 Strength 从小到大，形成 S 曲线)
+order_idx <- order(val_strength, decreasing = FALSE)
+ordered_nodes <- nodes[order_idx]
+
+# 2. 构建“长格式”数据框 (这是用分面画图的关键)
+# 我们把 Strength 和 EI 合并到一个表里，用 "Measure" 列来区分
+df_long <- data.frame(
+  Node = rep(nodes, 2),
+  Value = c(val_strength, val_ei),
+  Measure = c(rep("Bridge Strength", length(nodes)), 
+              rep("Bridge Expected Influence (1-step)", length(nodes)))
+)
+
+# 3. 锁定顺序
+# (A) 锁定节点顺序 (S型曲线)
+df_long$Node <- factor(df_long$Node, levels = ordered_nodes)
+# (B) 锁定面板顺序 (保证 Strength 在左边，EI 在右边)
+df_long$Measure <- factor(df_long$Measure, 
+                          levels = c("Bridge Strength", "Bridge Expected Influence (1-step)"))
+
+# 3. 绘图 (使用分面 Facet 实现灰色标题框)
+p_final <- ggplot(df_long, aes(x = Node, y = Value, group = 1)) +
+  geom_line(color = "black", size = 0.8) +
+  geom_point(color = "black", size = 3) +
+  
+  # ⭐ 核心：分面 (自动生成左右两个图，并带上标题框)
+  facet_wrap(~ Measure, scales = "free_x") + 
+  
+  coord_flip() +
+  scale_y_continuous(n.breaks = 6) +
+  labs(x = "", y = "") +
+  
+  # ⭐ 主题设置：复刻灰色背景和标题条
+  theme(
+    # 1. 画布背景 (灰色 #EBEBEB)
+    panel.background = element_rect(fill = "#EBEBEB", color = NA),
+    plot.background = element_rect(fill = "white", color = NA),
+    
+    # 2. 网格线 (白色，覆盖在灰色背景上)
+    panel.grid.major = element_line(color = "white", size = 0.5),
+    panel.grid.minor = element_blank(),
+    
+    # 3. 坐标轴
+    axis.ticks = element_blank(),
+    axis.text = element_text(color = "black", size = 10),
+    
+    # ⭐ 4. 标题栏背景 (深灰色条条！就是您要的那个)
+    strip.background = element_rect(fill = "#D9D9D9", color = NA),
+    # 标题栏文字
+    strip.text = element_text(size = 12, face = "bold", color = "black", margin = margin(5,0,5,0))
+  )
+
+
+# 4. 保存
+pdf("Figure_S1_Gender_female_Facet.pdf", width = 11, height = 7.5, family = "Times")
+print(p_final)
+dev.off()
+
+#---------------------------男女的稳定性---------------------------------#
+
+# 1. 运行 Bootstrap (Case-dropping)
+groups1 <- list("C-FASM" = 1:15, "CTQ" = 16:20)
+
+# 这里 statistics 必须准确指定你要对比的两个指标
+# 注意：bridgeExpectedInfluence 是固定写法，首字母小写
+boot_bridge1 <- bootnet(network_male,
+                        nBoots = 1000,
+                        type = "case",
+                        statistics = c("bridgeStrength", "bridgeExpectedInfluence"), 
+                        communities = groups1)
+
+
+# --- 打印 CS 系数查看稳定性 ---
+cat("Network 1 Stability:\n")
+print(corStability(boot_bridge1))
+
+# 2. 绘图并保存为 PDF (使用你提供的 grid 代码结构)
+
+pdf("Centrality_Bridge_Stability_Comparison.pdf", 
+    width = 170/25.4, height = 140/25.4)
+
+# 设置布局：这里我暂时设为 1行1列，因为你只画这一张对比图，这样图会更大、更清晰
+# 如果你以后想拼别的图，可以改回 grid.layout(1, 2)
+grid.newpage()
+pushViewport(viewport(layout = grid.layout(1, 1))) 
+
+# --- 绘制网络 ---
+# 关键点：这里没有加 theme_bw()，保留了默认的彩色背景和线条颜色
+p1 <- plot(boot_bridge1, 
+           statistics = c("bridgeStrength", "bridgeExpectedInfluence")) + 
+  theme(legend.position = "bottom",    # 保留你想要的图例位置
+        legend.title = element_blank()) 
+
+# 将图打印到布局的第1行第1列
+print(p1, vp = viewport(layout.pos.row = 1, layout.pos.col = 1))
+
+dev.off()
+#--------------------------------社区聚类检测------------------------------——#
+
+# ==============================================================================
+# 0. 加载包
+# ==============================================================================
+library(ggplot2)
+library(ggforce)  
+library(igraph)
+library(qgraph)
+library(dplyr)
+# ==============================================================================
+# 1. 准备数据与聚类
+# 提取图对象
+g <- graph_from_adjacency_matrix(mynetwork1$graph,
+                                 mode = "undirected",
+                                 weighted = TRUE,
+                                 diag = FALSE)
+
+# 运行聚类 (Walktrap)
+set.seed(123)
+comm_res <- cluster_walktrap(g)
+
+# ==============================================================================
+# 2. 计算布局 (⭐ 核心修改：更紧凑)
+# ==============================================================================
+# ==============================================================================
+# 2. 计算布局 (调整紧凑度)
+# ==============================================================================
+set.seed(123)
+# ⭐ repulsion 改成 0.6 (之前是0.8)，数字越小，点之间吸得越紧，网络越紧凑
+layout_matrix <- qgraph(mynetwork1$graph, layout = "spring", repulsion = 0.8, DoNotPlot = TRUE)$layout
+rownames(layout_matrix) <- colnames(mynetwork1$graph)
+
+# ==============================================================================
+# 3. 整理数据
+# ==============================================================================
+node_data <- data.frame(
+  id = 1:vcount(g),
+  x = layout_matrix[,1],
+  y = layout_matrix[,2],
+  name = colnames(mynetwork1$graph),
+  group = as.factor(membership(comm_res))
+)
+
+edge_list <- as_data_frame(g, what = "edges")
+edge_data <- edge_list %>%
+  mutate(
+    x_start = layout_matrix[from, 1],
+    y_start = layout_matrix[from, 2],
+    x_end= layout_matrix[to, 1],
+    y_end= layout_matrix[to, 2],
+    group_from = node_data$group[match(from, node_data$name)],
+    group_to= node_data$group[match(to, node_data$name)],
+    # 标记连线类型
+    line_type = ifelse(group_from == group_to, "Internal", "External")
+  )
+
+# ==============================================================================
+# 4. 配色方案 (复刻图5)
+# ==============================================================================
+# 背景色 (Fill) - 淡色
+cols_hulls <- c("1"="#E1BEE7", "2"="#C8E6C9", "3"="#FFCDD2", "4"="#B2EBF2")
+# 节点色 (Color) - 亮色
+cols_nodes <- c("1"="skyblue", "2"="orange", "3"="darkseagreen3", "4"="lightcoral")
+
+# ==============================================================================
+# 5. 绘图 (无 ggnewscale 版)
+library(stringr) # 必须加载 stringr
+
+# ==============================================================================
+# 1. 调整左边的网络图 (p_fixed)
+# ==============================================================================
+# 我们在原有的绘图代码基础上，加入 scale_x_continuous 来控制位置
+p_fixed_adjusted <- ggplot() +
+  # --- 连线 ---
+  geom_segment(data = subset(edge_data, line_type == "Internal"),
+               aes(x = x_start, y = y_start, xend = x_end, yend = y_end),
+               color = "#D32F2F", linewidth = 0.3, alpha = 0.5) +
+  geom_segment(data = subset(edge_data, line_type == "External"),
+               aes(x = x_start, y = y_start, xend = x_end, yend = y_end),
+               color = "black", linewidth = 0.4, alpha = 0.7) +
+  
+  # --- 背景色块 ---
+  geom_mark_hull(data = node_data,
+                 aes(x = x, y = y, group = group, fill = group),
+                 color = NA, concavity = 8, radius = unit(8, "mm"),
+                 expand = unit(8, "mm"), alpha = 0.45) +
+  
+  # --- 节点 ---
+  geom_point(data = node_data, aes(x = x, y = y), color = "black", size = 10) +
+  geom_point(data = node_data, aes(x = x, y = y, color = group), size = 19) +
+  
+  # --- 文字 ---
+  geom_text(data = node_data, aes(x = x, y = y, label = str_wrap(name, 7)),
+            size = 4, fontface = "bold", color = "black", lineheight = 0.8) +
+  
+  # --- 颜色设置 ---
+  scale_fill_manual(values = cols_hulls) +
+  scale_color_manual(values = cols_nodes) +
+  
+  # --- ⭐ 关键修改：解决“图被切掉”和“整体右移” ---
+  # expand = expansion(mult = c(左边留白比例, 右边留白比例))
+  # c(0.25, 0.05) 表示：左边多留25%的空白（把图挤向右边），右边留5%
+  scale_x_continuous(expand = expansion(mult = 0.1)) +
+  scale_y_continuous(expand = expansion(mult = 0.1)) +
+  
+  theme_void() +
+  theme(legend.position = "none") +
+  coord_fixed()
+
+# ==============================================================================
+# 2. 准备图例数据 (按 Cluster 自动分组)
+# ==============================================================================
+
+# 2.1 定义所有题目的详细描述字典
+item_descriptions <- data.frame(
+  name = c(
+    # FASM Items
+    "FASM_1", "FASM_2", "FASM_3", "FASM_4", "FASM_5",
+    "FASM_6", "FASM_7", "FASM_8", "FASM_9", "FASM_10",
+    "FASM_11", "FASM_12", "FASM_13", "FASM_14", "FASM_15",
+    # CTQ Items
+    "EA", "PA", "SA", "EN", "PN"
+  ),
+  desc = c(
+    "To avoid school, work, or other activities",
+    "To relieve feeling numb or empty",
+    "To get attention",
+    "To feel something, even if it was pain",
+    "To avoid doing something unpleasant",
+    "To try to get a reaction from someone",
+    "To receive more attention from parents",
+    "To avoid being with people",
+    "To punish yourself",
+    "To avoid punishment or consequences",
+    "To stop bad feelings",
+    "To let others know how desperate you were",
+    "To get your parents to understand/notice",
+    "To get help",
+    "To feel relaxed",
+    "Emotional abuse",
+    "Physical abuse",
+    "Sexual abuse",
+    "Emotional neglect",
+    "Physical neglect"
+  )
+)
+
+# 2.2 定义四个 Cluster 的标题
+cluster_titles <- c(
+  "1" = "Cluster 1: Childhood trauma questionnaire",
+  "2" = "Cluster 2: Social avoidance",
+  "3" = "Cluster 3: Emotion regulation",
+  "4" = "Cluster 4: Attention seeking"
+)
+
+# 2.3 自动构建图例表格 (核心算法)
+# 先把描述匹配到 node_data 里，获取每个题目的真实 Group
+legend_data_raw <- node_data %>%
+  select(name, group) %>%
+  left_join(item_descriptions, by = "name") %>%
+  arrange(group, name) # 按组排序
+
+# 循环生成带标题的最终数据框
+plot_legend_df <- data.frame()
+row_counter <- 0 # 用于Y轴排版
+
+# 倒序循环(4 -> 1)，因为画图是从下往上画的，或者我们用 row_id 控制
+# 这里我们生成从上往下的列表
+final_list <- list()
+
+for (g_id in 1:4) { # 遍历4个组
+  g_char <- as.character(g_id)
+  
+  # 1. 插入标题行
+  final_list[[length(final_list) + 1]] <- data.frame(
+    name = NA,
+    group = g_char,
+    display_text = cluster_titles[g_char],
+    type = "Title"
+  )
+  
+  # 2. 插入该组的题目
+  current_items <- legend_data_raw %>% filter(group == g_char)
+  if(nrow(current_items) > 0) {
+    items_df <- data.frame(
+      name = current_items$name,
+      group = g_char,
+      display_text = current_items$desc,
+      type = "Item"
+    )
+    final_list[[length(final_list) + 1]] <- items_df
+  }
+  
+  # 3. 插入空行 (分隔不同 Cluster)
+  if (g_id < 4) { # 最后一组后面不需要空行
+    final_list[[length(final_list) + 1]] <- data.frame(
+      name = NA, group = NA, display_text = "", type = "Space"
+    )
+  }
+}
+
+# 合并所有行
+legend_ready <- do.call(rbind, final_list)
+# 添加行号 (反转顺序，让第一行在最上面)
+legend_ready$row_id <- seq(nrow(legend_ready), 1, -1)
+
+# ==============================================================================
+# 3. 绘制右侧图例 (p_legend)
+# ==============================================================================
+p_legend_new <- ggplot(legend_ready) +
+  
+  # --- 画前面的彩色点 (只给 Item 画) ---
+  geom_point(data = subset(legend_ready, type == "Item"),
+             aes(x = 0, y = row_id, color = group),
+             size = 2.5) +
+  
+  # --- 画题目代号 (FASM_1:) ---
+  geom_text(data = subset(legend_ready, type == "Item"),
+            aes(x = 0.5, y = row_id, label = paste0(name, ":")),
+            hjust = 0, size = 2.8, color = "black") +
+  
+  # --- 画详细描述 ---
+  geom_text(data = subset(legend_ready, type == "Item"),
+            aes(x = ifelse(group == "1", 1.5, 3.2), 
+                y = row_id, label = display_text),
+            hjust = 0, size = 2.8, color = "grey20") +
+  
+  # --- 画 Cluster 标题 ---
+  geom_text(data = subset(legend_ready, type == "Title"),
+            aes(x = 0, y = row_id, label = display_text),
+            hjust = 0, fontface = "bold", size = 3.2) +
+  
+  # --- 颜色映射 ---
+  scale_color_manual(values = cols_nodes, guide = "none") +
+  
+  # --- 调整范围 ---
+  scale_x_continuous(limits = c(-0.5, 18)) + # 右边给足空间
+  scale_y_continuous(limits = c(0, max(legend_ready$row_id) + 1)) +
+  
+  theme_void() +
+  theme(plot.margin = margin(t = 5, r = 5, b = 5, l = 5))
+
+# ==============================================================================
+# 4. 最终拼接与保存
+# ==============================================================================
+# 左图占 1.5 份，右图占 1.2 份 (调整比例利用右边空位)
+final_plot_cluster <- p_fixed_adjusted + p_legend_new + plot_layout(widths = c(2, 1))
+
+pdf("Figure_Network_Journal_Standard_7inch.pdf", width = 12, height = 9)
+print(final_plot_cluster)
+dev.off()
+
+
+
+
+#------------------------------贝叶斯图---------------------------------#
+install.packages("bnlearn")
+library(bnlearn)
+# 强制转换为数值型 (假设您的数据框叫 data1)
+data1[] <- lapply(data1, as.numeric)
+
+# ==============================================================================
+# 2. 贝叶斯网络学习 (Bootstrapping)
+# ==============================================================================
+set.seed(123) # 保证结果可重复
+
+# 使用 Hill-Climbing 算法，以 BIC 为评分函数进行 1000 次迭代
+boot_res <- boot.strength(
+  data1, 
+  R = 1000, 
+  algorithm = "hc",
+  algorithm.args = list(score = "bic-g")
+)
+print(avg_net_final)
+# ==============================================================================
+# 3. 构建平均网络 (确定唯一方向)
+# ==============================================================================
+# 按照论文方法，应用 0.85 的阈值。
+# 该函数会自动选择在 1000 次迭代中出现频率最高的方向，从而保证图中全是单向箭头。
+avg_net <- averaged.network(boot_res, threshold = 0.85)
+
+# ==============================================================================
+# 4. 计算权重矩阵 (基于 BIC 弧强度)
+# ==============================================================================
+# 计算每条边的 BIC 贡献度
+raw_strength <- arc.strength(avg_net, data1, criterion = "bic-g")
+
+nodes_names <- colnames(data1)
+n_nodes <- length(nodes_names)
+weight_matrix <- matrix(0, nrow = n_nodes, ncol = n_nodes, 
+                        dimnames = list(nodes_names, nodes_names))
+
+# 提取邻接矩阵
+dag_matrix <- amat(avg_net)
+
+# 将 BIC 绝对值填入权重矩阵
+for(i in 1:nrow(raw_strength)) {
+  u <- as.character(raw_strength$from[i])
+  v <- as.character(raw_strength$to[i])
+  
+  # 仅在 avg_net 确定的方向上填入权重，确保非对称（无双箭头）
+  if(dag_matrix[u, v] == 1) {
+    weight_matrix[u, v] <- abs(raw_strength$strength[i])
+  }
+}
+
+# ==============================================================================
+# 5. 绘图与导出 (对标论文视觉风格)
+# ==============================================================================
+# 保存为 PDF，设置合适的尺寸
+pdf("Figure_Bayesian_DAG_Briganti_Style.pdf", width = 12, height = 7, family = "sans")
+
+# 设置布局：左侧网络图，右侧图例
+layout(matrix(c(1, 2), 1, 2), widths = c(4, 3))
+par(mar = c(5, 4, 4, 2))
+
+# 定义节点分组
+my_groups <- list("Self-Injury (FASM)" = 1:15, "Trauma (CTQ)" = 16:20)
+
+# 绘制图形
+qgraph(
+  weight_matrix, 
+  layout = "spring",
+  groups = my_groups,
+  color = c("skyblue", "orange"),
+  directed = TRUE,      # 开启单向箭头
+  bidirectional = FALSE, # 禁用双箭头
+  edge.width = 1.0,     # 线宽比例
+  maximum = max(weight_matrix), 
+  fade = TRUE,          # 线条深浅随 BIC 强度变化
+  labels = nodes_names,
+  label.cex = 1.3,
+  vsize = 6,
+  borders = FALSE,
+  legend = FALSE,
+  layout.par = list(repulse.rad = 60)
+)
+
+# 绘制图例 (Legend)
+par(mar = c(0, 0, 0, 0))
+plot.new()
+legend(
+  x = -0.05, y = 0.95,
+  legend = c(
+    expression(bold("FASM")),
+    " FASM_1: To avoid school, work, or other activities",
+    " FASM_2: To relieve feeling numb or empty",
+    " FASM_3: To get attention",
+    " FASM_4: To feel something, even if it was pain",
+    " FASM_5: To avoid doing something unpleasant you don't want",
+    " FASM_6: To try to get a reaction from someone, even negative",
+    " FASM_7: To receive more attention from your parents or friends",
+    " FASM_8: To avoid being with people",
+    " FASM_9: To punish yourself",
+    " FASM_10: To avoid punishment or paying the consequences",
+    " FASM_11: To stop bad feelings",
+    " FASM_12: To let others know how desperate you were",
+    " FASM_13: To get your parents to understand or notice you",
+    " FASM_14: To get help",
+    " FASM_15: To feel relaxed",
+    "",                     
+    expression(bold("CTQ")),
+    " EA: Emotional abuse",
+    " PA: Physical abuse",
+    " SA: Sexual abuse",
+    " EN: Emotional neglect",
+    " PN: Physical neglect"
+  ),
+  cex = 1, y.intersp = 1.3, pt.cex = 1.8, bty = "n",
+  pch = c(NA, rep(19, 15), NA, NA, rep(19, 5)),
+  col = c(NA, rep("skyblue", 15), NA, NA, rep("orange", 5))
+)
+
+dev.off()
