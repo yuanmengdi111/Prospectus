@@ -1,0 +1,135 @@
+```{r}
+
+library(lavaan)
+library(dplyr)
+library(psych)      
+library(semPlot)    
+library(semTools)
+
+
+raw_data <- read.csv("C:/Users/Administrator/Desktop/CTQ.csv")
+
+model_data <- raw_data %>%
+  mutate(
+    rse3_rev  = 3 - rse3, rse5_rev  = 3 - rse5, rse9_rev  = 3 - rse9, rse10_rev = 3 - rse10,
+    ctq2_rev  = 6 - ctq2, ctq5_rev  = 6 - ctq5, ctq7_rev  = 6 - ctq7,
+    ctq13_rev = 6 - ctq13, ctq19_rev = 6 - ctq19, ctq26_rev = 6 - ctq26, ctq28_rev = 6 - ctq28,
+    CM_EA = ctq3 + ctq8 + ctq14 + ctq18 + ctq25,
+    CM_PA = ctq9 + ctq11 + ctq12 + ctq15 + ctq17,
+    CM_SA = ctq20 + ctq21 + ctq23 + ctq24 + ctq27,
+    CM_PN = ctq1 + ctq2_rev + ctq4 + ctq6 + ctq26_rev,
+    CM_EN = ctq5_rev + ctq7_rev + ctq13_rev + ctq19_rev + ctq28_rev,
+    
+    SE_p1 = rse1 + rse4 + rse7,
+    SE_p2 = rse2 + rse5_rev + rse8,
+    SE_p3 = rse3_rev + rse6 + rse9_rev + rse10_rev,
+    
+    DEP_p1 = phq1 + phq2 + phq3,
+    DEP_p2 = phq4 + phq5 + phq6,
+    DEP_p3 = phq7 + phq8 + phq9
+  )
+
+table1_data <- model_data %>%
+  mutate(
+    Self_Esteem_Total = SE_p1 + SE_p2 + SE_p3,
+    Depression_Total = DEP_p1 + DEP_p2 + DEP_p3
+  ) %>%
+  select(
+    CM_EA,  
+    CM_PA,  
+    CM_SA,  
+    CM_PN, 
+    CM_EN,  
+    Self_Esteem_Total, 
+    Depression_Total
+  )
+
+desc_stats <- describe(table1_data)
+cat("\n=================== 1. Mean, SD) ===================\n")
+print(desc_stats[, c("mean", "sd", "skew", "kurtosis")])
+
+
+cat("\n=================== 2. r,p ===================\n")
+cor_results <- corr.test(table1_data, method = "pearson", adjust = "none")
+
+cat("\n--- r ---\n")
+print(round(cor_results$r, 3))
+
+cat("\n--- p ---\n")
+print(round(cor_results$p, 3))
+
+cat("\n=================== 1.Cronbach's Alpha===================\n")
+
+cat("\n--- PHQ-9  ---")
+phq_items <- model_data %>% select(phq1:phq9)
+cat("\nAlpha:", alpha(phq_items)$total$raw_alpha, "\n")
+
+cat("\n--- RSE  ---")
+rse_items <- model_data %>% select(rse1, rse2, rse3_rev, rse4, rse5_rev, rse6, rse7, rse8, rse9_rev, rse10_rev)
+cat("\nAlpha:", alpha(rse_items)$total$raw_alpha, "\n")
+
+cat("\n--- CTQ  ---")
+ctq_items <- model_data %>% select(
+  ctq3, ctq8, ctq14, ctq18, ctq25, ctq9, ctq11, ctq12, ctq15, ctq17,
+  ctq20, ctq21, ctq23, ctq24, ctq27, ctq1, ctq2_rev, ctq4, ctq6, ctq26_rev,
+  ctq5_rev, ctq7_rev, ctq13_rev, ctq19_rev, ctq28_rev)
+cat("\nAlpha:", alpha(ctq_items)$total$raw_alpha, "\n")
+
+
+cat("\n=================== Step 1=====================\n")
+
+
+measurement_model <- '
+  Trauma     =~ CM_EA + CM_PA + CM_SA + CM_PN + CM_EN
+  SelfEsteem =~ SE_p1 + SE_p2 + SE_p3
+  Depression =~ DEP_p1 + DEP_p2 + DEP_p3
+'
+
+fit_step1 <- cfa(model = measurement_model, data = model_data, estimator = "MLR")
+
+summary(fit_step1, fit.measures = TRUE, standardized = TRUE)
+
+
+
+cat("\n=================== Step 2=====================\n")
+
+structural_model <- '
+  Trauma     =~ CM_EA + CM_PA + CM_SA + CM_PN + CM_EN
+  SelfEsteem =~ SE_p1 + SE_p2 + SE_p3
+  Depression =~ DEP_p1 + DEP_p2 + DEP_p3
+
+  Depression ~ c*Trauma + b*SelfEsteem
+  SelfEsteem ~ a*Trauma
+
+  indirect_effect := a * b           
+  direct_effect   := c               
+  total_effect    := c + (a * b)     
+'
+
+fit_step2 <- sem(model = structural_model, 
+                 data = model_data, 
+                 estimator = "MLR")
+
+summary(fit_step2, 
+        fit.measures = TRUE, 
+        standardized = TRUE, 
+        rsquare = TRUE)
+
+mc_results <- monteCarloCI(fit_step2, standardized = TRUE)
+
+print(mc_results)
+
+semPaths(fit_step2, 
+         whatLabels = "std",       
+         layout = "tree",  
+         std = "std.all",       
+         style = "lisrel",         
+         edge.label.cex = 0.8,     
+         nCharNodes = 0,           
+         sizeMan = 8,           
+         sizeLat = 10,             
+         residuals = FALSE,        
+         intercepts = FALSE,       
+         fade = FALSE,             
+         title = FALSE)
+```
