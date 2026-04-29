@@ -1,0 +1,230 @@
+library(qgraph)
+library(networktools)
+library(bootnet)
+library(mgm)
+
+#----------------------估计网络-------------------
+data1<-read.csv("E:\\Rworkplace\\童年创伤自伤\\重来.csv")
+
+network1 <- as.matrix(data1)
+
+mynetwork1 <- estimateNetwork(data=network1,
+                              default = "EBICglasso",
+                              tuning = 0.5,
+                              corMethod="cor",#相关
+                              corArgs=list(method="spearman",#估计更加稳健
+                                           use="pairwise.complete.obs"))
+summary(mynetwork1)
+sort(mynetwork1$graph["EA", ], decreasing = TRUE)
+cor(data1[, c("RSE3", "RSE9", "PHQ6")], use = "pairwise.complete.obs")
+weight_matrix<-mynetwork1$graph
+#-----------------------原始网络图----------------------
+dev.off() 
+pdf("Network.pdf", width = 6.3, height = 4.5)
+
+windows(width = 14, height = 6)  
+
+layout(matrix(c(1, 2), 1, 2), widths = c(1.2, 1))
+
+
+par(mar = c(3, 2, 3, 1))
+
+
+plot_colors <- c("skyblue", "orange","indianred1") 
+
+plot(mynetwork1, 
+     layout = "spring",
+     groups = list("EGO" = 6:15,"CTQ" = 1:5, "PHQ" = 16:24), 
+     color = plot_colors,   
+     posCol = "#228B22",    
+     fade = FALSE,
+     trans = 0.6,
+     minimum = 0.05,
+     cut = 0,
+     edge.width = 1,
+     legend = FALSE,        
+     edge.labels = TRUE,     
+     edge.label.cex = 0.55,   
+     edge.label.bg = "white",
+     vsize = 4.5,             
+     label.cex = 1.3        
+)
+
+par(mar = c(0, 0, 0, 0)) 
+plot.new()         
+
+legend(
+  x = 0, y = 1,   
+  legend = c(
+    expression(bold("RSE")),
+    " RSE1: I feel that I'm a person of worth.",
+    " RSE2: I feel that I have a number of good qualities.",
+    " RSE3: All in all, I am inclined to feel that I am a failure.",
+    " RSE4: I am able to do things as well as most other people.",
+    " RSE5: I feel I do not have much to be proud of.",
+    " RSE6: I take a positive attitude toward myself.",
+    " RSE7: On the whole, I am satisfied with myself.",
+    " RSE8: I wish I could have more respect for myself.",
+    " RSE9: I certainly feel useless at times. ",
+    " RSE10: At times I think I am no good at all.",
+    "",                     
+    expression(bold("CTQ")),
+    " EA: Emotional abuse",
+    " PA: Physical abuse",
+    " SA: Sexual abuse",
+    " EN: Emotional neglect",
+    " PN: Physical neglect",
+    "",  
+    expression(bold("PHQ-9")),
+    " PHQ1: Anhedonia.",
+    " PHQ2: Depressed mood.",
+    " PHQ3: Sleep problems.",
+    " PHQ4: Fatigue/Low energy.",
+    " PHQ5: Appetite changes.",
+    " PHQ6: Worthlessness/Guilt.",
+    " PHQ7: Concentration difficulty.",
+    " PHQ8: Psychomotor symptoms.",
+    " PHQ9: Suicidal ideation."
+  ),
+  cex = 0.55,        
+  y.intersp = 1.2,   
+  pt.cex = 0.8,     
+  bty = "n",         
+  pch = c(
+    NA,             
+    rep(19, 10),     
+    NA,              
+    NA,             
+    rep(19, 5),       
+    NA,             
+    NA,             
+    rep(19, 9)
+    ),
+  col = c(
+    NA,
+    rep("skyblue", 10), 
+    NA,
+    NA,
+    rep("orange", 5),  
+    NA,
+    NA,
+    rep("indianred1", 9)
+    )
+)
+
+dev.off()
+
+#-----------------------------中心性EI和桥EI----------------------------------
+library(bootnet)
+library(networktools)
+library(ggplot2)
+library(patchwork) 
+library(dplyr)     
+library(grid)
+
+# ==============================================================================
+# 0. 定义“灰色皮肤”主题
+# ==============================================================================
+my_grey_theme <- theme(
+
+  panel.background = element_rect(fill = "#EBEBEB", color = NA),
+  panel.grid.major = element_line(color = "white", size = 0.5),
+  panel.grid.minor = element_blank(),
+  plot.background = element_rect(fill = "white", color = NA),
+  axis.ticks = element_blank(),
+  axis.text = element_text(color = "black", size = 10),
+  strip.background = element_rect(fill = "#D9D9D9", color = NA),
+  strip.text = element_text(size = 12, face = "bold", color = "black", margin = margin(6,0,6,0))
+)
+
+# ==============================================================================
+# 1. 数据准备 (保持原逻辑)
+# ==============================================================================
+
+
+cent_table <- centralityTable(mynetwork1) 
+df_general <- cent_table %>% 
+  filter(measure == "ExpectedInfluence") %>%
+  select(node, value) %>%
+  mutate(value = scale(value), 
+         Label = " Expected Influence") 
+
+my_communities <- c(rep("CTQ", 5), rep("EGO", 10), rep("PHQ", 9))
+bridge_res <- bridge(mynetwork1$graph, communities = my_communities)
+
+df_bridge <- data.frame(
+  node = names(bridge_res$`Bridge Expected Influence (1-step)`),
+  value = as.numeric(bridge_res$`Bridge Expected Influence (1-step)`),
+  Label = " Bridge Expected Influence"
+) %>%
+  mutate(value = scale(value))
+
+# ==============================================================================
+# 2. 统一排序 (保持 S 型曲线)
+# ==============================================================================
+ordered_nodes <- df_general$node[order(df_general$value)]
+
+df_general$node <- factor(df_general$node, levels = ordered_nodes)
+df_bridge$node  <- factor(df_bridge$node, levels = ordered_nodes)
+
+# ==============================================================================
+# 3. 绘图 (应用灰色主题)
+# ==============================================================================
+
+# --- 左图：General EI ---
+p1 <- ggplot(df_general, aes(x = node, y = value, group = 1)) +
+  geom_line(color = "black", size = 0.8) +
+  geom_point(size = 1.5, color = "black") +
+  
+  facet_wrap(~ Label) + 
+  
+  coord_flip() +
+  scale_y_continuous(n.breaks = 6) +
+  labs(y = "Z-score", x = "") +
+  
+  my_grey_theme
+
+# --- 右图：Bridge EI ---
+p2 <- ggplot(df_bridge, aes(x = node, y = value, group = 1)) +
+  geom_line(color = "black", size = 0.8) +
+  geom_point(size = 1.5, color = "black") +
+  
+  facet_wrap(~ Label) +
+  
+  coord_flip() +
+  scale_y_continuous(n.breaks = 6) +
+  labs(y = "Z-score", x = "") +
+  
+  # 应用主题 + 隐藏Y轴标签
+  my_grey_theme + 
+  theme(
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank()
+  )
+
+# ==============================================================================
+# 4. 拼图并保存
+# ==============================================================================
+final_plot <- p1 + p2
+
+pdf("Figure_Centrality_Connected_Separate_Gray.pdf", width = 6.3, height = 4.5)
+print(final_plot)
+dev.off()
+
+#------------------------------强度EI的稳定性---------------------------------#
+
+# ==============================================================================
+# 1. 运行 Bootstrap (Case-dropping)
+# ==============================================================================
+groups1 <- list("CTQ" = 1:5, "EGO" = 6:15, "PHQ" = 16:24)
+
+boot_bridge1 <- bootnet(mynetwork1,
+                        nBoots = 1000,
+                        type = "case",
+                        statistics = c("ExpectedInfluence", "bridgeExpectedInfluence"), 
+                        communities = groups1)
+
+
+# --- 打印 CS 系数查看稳定性 ---
+cat("Network 1 Stability:\n")
+print(corStability(boot_bridge1))
